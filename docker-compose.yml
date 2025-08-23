@@ -1,0 +1,12 @@
+services:
+  quantum:
+    build: .
+    container_name: quantum-lab
+    volumes:
+      - ./notebooks:/workspace/notebooks
+    working_dir: /workspace/notebooks
+    ports:
+      - "4000:4000"
+    env_file:
+      - .env
+    tty: true

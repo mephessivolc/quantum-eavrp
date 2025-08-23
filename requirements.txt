@@ -1,0 +1,15 @@
+pennylane
+dimod
+matplotlib
+numpy
+pandas
+pennylane_lightning
+rustworkx
+seaborn
+rustworkx
+networkx
+jupyter
+jupyterlab
+notebook
+voila
+nbconvert
