@@ -3,10 +3,11 @@ services:
     build: .
     container_name: quantum-lab
     volumes:
-      - ./notebooks:/workspace/notebooks
-    working_dir: /workspace/notebooks
+      - ./notebooks:/home/jovyan/work
+    working_dir: /home/jovyan/work
     ports:
       - "4000:4000"
     env_file:
       - .env
+    stdin_open: true     
     tty: true

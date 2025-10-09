@@ -1,16 +1,18 @@
 pennylane
+pennylane_lightning
+pennylane-qiskit
 dimod
 matplotlib
 numpy
 pandas
-pennylane_lightning
-rustworkx
 seaborn
-rustworkx
+# rustworkx
 networkx
-jupyter
-jupyterlab
-notebook
-voila
+# jupyter
+# jupyterlab
+# notebook
+# voila
 nbconvert
 pyqubo
+osmnx
+scikit-learn
