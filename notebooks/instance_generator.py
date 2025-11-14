@@ -1,6 +1,7 @@
 # instance_generator.py
 from __future__ import annotations
 import random
+import math
 from typing import List, Tuple
 from utils import Passenger, Vehicle, RechargePoint, Depot
 
@@ -113,6 +114,7 @@ class InstanceGenerator:
 # Example usage
 if __name__ == "__main__":
     import math
+    from graphs import GraphBuilder
 
     # Example: simulate São Paulo urban area bounding box
     generator = InstanceGenerator(
@@ -143,7 +145,7 @@ if __name__ == "__main__":
     for d in depots:
         print(f"Depots {d.id} location={d.node}")
 
-    from graphs import GraphBuilder
+
     builder = GraphBuilder(passengers, None, depots, recharges)
     G = builder.build()
     print(f"Graph has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges.")

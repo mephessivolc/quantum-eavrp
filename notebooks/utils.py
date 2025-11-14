@@ -12,6 +12,7 @@ DistanceFn = Callable[[float, float, float, float], float]
 class Node:
     name: str
     loc: Coord
+
     def as_tuple(self) -> Tuple[str, Coord]: 
         return self.name, self.loc
 
@@ -20,6 +21,7 @@ class Arc:
     u: Node
     v: Node
     cost: float
+
     def as_tuple(self) -> Tuple[str, str, float]: 
         return self.u.name, self.v.name, self.cost
 
@@ -27,8 +29,10 @@ class Arc:
 def _get_metric_fn(metric: str) -> DistanceFn:
     # Search for the function in Geographics.Distances by name
     fn = getattr(Distances, metric, None)
+
     if fn is None or not callable(fn):
         raise ValueError(f"métrica inválida: {metric}")
+    
     return fn  # type: ignore[return-value]
 
 class Locatable:
@@ -48,11 +52,14 @@ class Locatable:
 class OriginDest:
     _o: Node
     _d: Node
+
     def get_nodes(self) -> List[Node]: 
         return [self._o, self._d]
+    
     def get_internal_arc(self, metric: str = "euclidean") -> Arc:
         fn = _get_metric_fn(metric)
         x1, y1 = self._o.loc; x2, y2 = self._d.loc
+
         return Arc(self._o, self._d, float(fn(x1, y1, x2, y2)))
     
     @property
@@ -72,15 +79,17 @@ class Passenger(OriginDest):
         self._id = pid
         self._o = Node(f"Po{pid}", origin)
         self._d = Node(f"Pd{pid}", destination)
+
     @property
-    def id(self) -> int: return self._id
+    def id(self) -> int: 
+        return self._id
 
 class Group(OriginDest):
     def __init__(self, gid: int, passengers: List[Passenger]):
-        if not passengers: raise ValueError("Group requer >= 1 passageiro")
+        if not passengers: raise ValueError("Group need >= 1 passengers")
         self._id = gid
         self._passengers = passengers
-        # Origem/destino do grupo herdados do primeiro passageiro (regra atual)
+
         self._o = Node(f"Go{gid}", passengers[0].origin_node.loc)
         self._d = Node(f"Gd{gid}", passengers[0].destination_node.loc)
 
@@ -165,7 +174,7 @@ class Vehicle(Locatable):
     def needs_recharge(self, dist_km: float) -> bool:
         return self._battery - self.energy_needed(dist_km) < self._min
 
-# ---------- Utilidades orientadas a objetos ----------
+# ---------- Object-oriented utilities ----------
 def make_internal_graph(passengers: List[Passenger], metric: str = "euclidean") -> Dict[str, List[Arc]]:
     return {str(p.id): [p.get_internal_arc(metric)] for p in passengers}
 

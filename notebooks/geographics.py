@@ -7,15 +7,15 @@ Array = np.ndarray
 
 class Distances:
     """
-    Distâncias escalares e vetorizadas.
-    Escalar: (x1,y1,x2,y2) -> float
-    Vetor: arrays broadcastáveis -> array
+    Scalar and vector distances.
+    Scalar: (x1, y1, x2, y2) -> float
+    Vector: broadcastable arrays -> array
     """
 
     @staticmethod
     def haversine(lat1, lon1, lat2, lon2):
         """
-        Entradas em graus. Saída em quilômetros. Suporta escalar ou arrays.
+        Inputs in degrees. Output in kilometers. Supports scalar or arrays.
         """
         lat1 = np.asarray(lat1, dtype=np.float64)
         lon1 = np.asarray(lon1, dtype=np.float64)
@@ -51,8 +51,8 @@ class Distances:
     @staticmethod
     def matrix(points: Array, metric: Literal["euclidean","manhattan","haversine"]="euclidean") -> Array:
         """
-        Matriz NxN de distâncias. points shape (N,2).
-        Para haversine, assume pontos como (lat, lon) em graus.
+        NxN matrix of distances. Points shape (N,2).
+        For haversine, assume points as (lat, lon) in degrees.
         """
         pts = np.asarray(points, dtype=np.float64)
         if pts.ndim != 2 or pts.shape[1] != 2:
@@ -70,7 +70,7 @@ class Distances:
     @staticmethod
     def pairwise(points_a: Array, points_b: Array, metric: Literal["euclidean","manhattan","haversine"]="euclidean") -> Array:
         """
-        Distâncias entre dois conjuntos. A shape (NA,2), B shape (NB,2) -> (NA,NB).
+        Distances between two sets. A shape (NA,2), B shape (NB,2) -> (NA,NB).
         """
         A = np.asarray(points_a, dtype=np.float64)
         B = np.asarray(points_b, dtype=np.float64)
@@ -86,12 +86,11 @@ class Distances:
             return Distances.haversine(x1, y1, x2, y2)
         raise ValueError("metric inválida")
 
-
 if __name__ == "__main__":
-    # Demo curto
-    pts = generate_random_geografic_points(5, seed=42)
-    print("Pontos (lat, lon):\n", pts)
-    dE = Distances.matrix(pts, "euclidean")
-    dH = Distances.matrix(pts, "haversine")
-    print("D_euclidean:\n", np.round(dE, 3))
-    print("D_haversine (km):\n", np.round(dH, 3))
+    sp = (-23.5505, -46.6333)
+    rio = (-22.9068, -43.1729)
+    print(f"Haversine: {Distances.haversine(sp[0], sp[1], rio[0], rio[1])}")
+    print(f"Euclidean: {Distances.euclidean(0, 0, 3, 4)}")
+    print(f"Manhattan: {Distances.manhattan(0, 0, 3, 4)}")
+    pts = np.array([[0, 0], [3, 4]])
+    print(f"Matrix: {Distances.matrix(pts, metric='euclidean')}")
