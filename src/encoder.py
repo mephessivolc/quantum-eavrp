@@ -1,205 +1,308 @@
-"""
-VRP encoder: VRP instance → QUBO, and bitstring → routes (decoder).
-"""
+# encoder.py
 
 from __future__ import annotations
 
-from typing import Dict, List, Hashable, Optional, Any, Iterable
+from typing import Any, Dict, Tuple, Optional
 from pennylane import numpy as np
-
 import networkx as nx
 
-from qubo import QUBO, VarKey
+from constraints import ConstraintTerm
 
+Index = int
+NodeId = Any
+VehicleId = int
 
 class Encoder:
     """
-    VRP encoder: builds a QUBO model from a VRP instance and decodes bitstrings.
+    QUBO encoder for a taxi-style VRP defined on a NetworkX graph.
 
-    Responsibilities
-    ----------------
-    - Store the VRP instance (graph, vehicles, depot, etc.).
-    - Define binary variables (e.g., x_{kij} for vehicle k using arc i→j).
-    - Build the QUBO with the objective + hard constraints.
-    - Decode a bitstring back into vehicle routes.
-
-    This class is domain-specific (VRP / EA-VRP).
+    This class is intentionally minimal. It:
+    - stores a copy of the graph,
+    - defines the variable indexing structure,
+    - allocates Q, c, offset,
+    - exposes hooks to add objective and constraint terms,
+    - returns (Q, c, offset, var_index) for downstream quantum solvers.
     """
 
     def __init__(
         self,
         graph: nx.Graph,
         num_vehicles: int,
-        depot: Hashable,
-        *,
-        distance_attr: str = "distance",
-        demands: Optional[Dict[Hashable, float]] = None,
-        capacity: Optional[float] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        penalty_params: Optional[Dict[str, float]] = None,
+        constraints_handler: Optional[Any] = None,
+        cost_attribute: str = "distance",
     ) -> None:
-        self.graph = graph
-        self.num_vehicles = num_vehicles
-        self.depot = depot
-        self.distance_attr = distance_attr
-
-        self.demands = demands or {}
-        self.capacity = capacity
-        self.metadata = metadata or {}
-
-        self.nodes: List[Hashable] = list(self.graph.nodes())
-        if depot not in self.nodes:
-            raise ValueError("Depot node is not in the graph.")
-
-        self.customers: List[Hashable] = [n for n in self.nodes if n != depot]
-
-        # Internal variable indexing (to be filled in _build_variable_index)
-        self.var_index: Dict[VarKey, int] = {}
-        self.index_var: Dict[int, VarKey] = {}
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def build_qubo(self) -> QUBO:
         """
-        Build the QUBO model for this VRP instance.
-
-        This includes:
-            - objective term (e.g., distance minimization),
-            - hard constraints (e.g., degree constraints, depot constraints),
-        encoded as penalties in the Q matrix.
-
-        Returns
-        -------
-        QUBO
-            The QUBO model containing Q, constant, and variable mappings.
-        """
-        self._build_variable_index()
-        n_vars = len(self.var_index)
-        Q = np.zeros((n_vars, n_vars), dtype=float)
-        constant = 0.0
-
-        # 1. Objective: distance minimization
-        constant = self._encode_objective(Q, constant)
-
-        # 2. Hard constraints: must be satisfied by any valid solution
-        constant = self._encode_hard_constraints(Q, constant)
-
-        return QUBO(Q=Q, constant=constant, var_index=self.var_index, index_var=self.index_var)
-
-    def decode(self, bitstring: Iterable[int]) -> Dict[int, Any]:
-        """
-        Decode a bitstring into a set of routes (one per vehicle).
+        Initialize the encoder with a fixed VRP instance.
 
         Parameters
         ----------
-        bitstring : iterable of int
-            Binary values corresponding to QUBO variables.
-
-        Returns
-        -------
-        Dict[int, Any]
-            A structured representation of routes, e.g.:
-            {
-                0: {"route": [depot, ..., depot], "distance": ...},
-                1: {"route": [depot, ..., depot], "distance": ...},
-                ...
-            }
+        graph:
+            NetworkX graph representing the instance. A copy is stored
+            internally to avoid accidental external mutations.
+        num_vehicles:
+            Number of vehicles available.
+        penalty_params:
+            Penalty weights for constraints.
+        constraints_handler:
+            Optional object responsible for building constraint terms.
+            (We will define its interface later.)
         """
-        # TODO: implement bitstring → arcs → routes reconstruction.
-        #       This will likely:
-        #       - build a directed graph per vehicle from active x_{kij} = 1,
-        #       - extract cycles/paths starting and ending at the depot,
-        #       - compute distances using the original graph.
-        raise NotImplementedError("Decoder not implemented yet.")
+        # Problem data
+        self.graph: nx.Graph = graph.copy()
+        self.num_vehicles: int = num_vehicles
+        self.penalty_params: Dict[str, float] = penalty_params or {}
+        self.constraints_handler: Optional[Any] = constraints_handler
+        self.cost_attribute: str = cost_attribute
 
-    @property
-    def num_variables(self) -> int:
-        """Return the number of binary variables (after indexing has been built)."""
-        if not self.var_index:
-            raise RuntimeError("Variable index has not been built yet.")
-        return len(self.var_index)
+        # Variable indexing: (vehicle_id, origin_node, destination_node) -> bit index
+        self._var_index: Dict[Tuple[VehicleId, NodeId, NodeId], Index] = {}
+        self._num_vars: int = 0
 
-    # ------------------------------------------------------------------
-    # Internal helpers (encoding)
-    # ------------------------------------------------------------------
+        # QUBO components (allocated after variable index is built)
+        self.Q: Optional[np.ndarray] = None
+        self.c: Optional[np.ndarray] = None
+        self.offset: float = 0.0
+
+    # ==========================
+    # PUBLIC MAIN ENTRY POINT
+    # ==========================
+
+    def encode(
+        self,
+    ) -> Tuple[np.ndarray, np.ndarray, float, Dict[Tuple[VehicleId, NodeId, NodeId], Index]]:
+        """
+        Orchestrate the full encoding process.
+
+        High-level steps:
+        1. Build variable index (mapping VRP decisions to bit indices).
+        2. Initialize Q, c, and offset.
+        3. Add base travel cost terms.
+        4. Add additional objective terms (optional).
+        5. Add constraint terms (via constraints_handler or custom logic).
+        6. Finalize and return Q, c, offset, var_index.
+        """
+        self._build_variable_index()
+        self._initialize_qubo_matrices()
+        self._add_travel_cost_terms()
+        self._add_additional_objective_terms()
+        self._add_constraint_terms()
+        return self._finalize_qubo()
+
+    # ==========================
+    # STEP 1: VARIABLES / INDICES
+    # ==========================
 
     def _build_variable_index(self) -> None:
         """
-        Assign a unique index to each binary variable used by the QUBO.
+        Define which decisions become binary variables and assign indices.
 
-        Typical choice for arc-based VRP:
-            VarKey = (k, i, j) for vehicle k going from node i to node j.
+        Typical pattern for an arc-based taxi-style model:
+        - For each vehicle v
+        - For each pair of distinct nodes (i, j)
+        - Create a variable x[v, i, j] indicating that v travels directly i -> j (i != j).
+
+        This method must:
+        - fill self._var_index with keys (v, i, j) mapped to integer indices,
+        - update self._num_vars with the total number of variables.
         """
-        if self.var_index:
-            return
+        # To be implemented
+        self._var_index.clear()
+        current_index: int = 0
 
-        idx = 0
-        for k in range(self.num_vehicles):
-            for i in self.nodes:
-                for j in self.nodes:
+        # We fix an iteration order over nodes to ensure determinism.
+        # If nodes are sortable (e.g. int, str), sorted(self.graph.nodes)
+        # gives a stable order. If not, list(self.graph.nodes) preserves
+        # the graph's insertion order.
+        try:
+            nodes = sorted(self.graph.nodes)
+        except TypeError:
+            nodes = list(self.graph.nodes)
+
+        for v in range(self.num_vehicles):
+            for i in nodes:
+                for j in nodes:
                     if i == j:
-                        continue
-                    key: VarKey = (k, i, j)
-                    self.var_index[key] = idx
-                    self.index_var[idx] = key
-                    idx += 1
+                        continue  # no self-loop variable for now
 
-    def _encode_objective(self, Q: np.ndarray, constant: float) -> float:
+                    key = (v, i, j)
+
+                    # Defensive: avoid accidental duplicates
+                    if key in self._var_index:
+                        # In this basic design, this should never happen.
+                        # If it does, it's a modeling bug.
+                        raise ValueError(f"Duplicate variable key detected: {key}")
+
+                    self._var_index[key] = current_index
+                    current_index += 1
+
+        self._num_vars = current_index
+
+    @property
+    def get_num_vars(self):
+        return self._num_vars
+    
+    # ==========================
+# STEP 2: INITIALIZATION
+    # ==========================
+
+    def _initialize_qubo_matrices(self) -> None:
         """
-        Encode the VRP objective (e.g., total travel distance) into Q.
+        Allocate Q, c, and offset based on self._num_vars.
 
-        Parameters
-        ----------
-        Q : np.ndarray
-            QUBO matrix to be updated in-place.
-        constant : float
-            Current constant term, to be updated and returned.
-
-        Returns
-        -------
-        float
-            Updated constant term.
+        After _build_variable_index has been executed, self._num_vars must
+        be known. Then:
+        - Q is an (N x N) zero matrix (quadratic terms),
+        - c is a length-N zero vector (linear terms),
+        - offset is a scalar (constant term, already initialized to 0.0).
         """
-        # TODO: add distance-based contributions to Q diagonal entries.
-        # Example sketch:
-        #
-        # for (i, j, data) in self.graph.edges(data=True):
-        #     dist = float(data.get(self.distance_attr, data.get("weight", 1.0)))
-        #     for k in range(self.num_vehicles):
-        #         if i != j:
-        #             idx = self.var_index[(k, i, j)]
-        #             Q[idx, idx] += dist
-        #         if j != i:
-        #             idx = self.var_index[(k, j, i)]
-        #             Q[idx, idx] += dist
-        #
-        raise NotImplementedError("Objective encoding not implemented yet.")
+        if self._num_vars <= 0:
+            raise ValueError(
+                "Number of variables is zero or negative; "
+                "did you run _build_variable_index() correctly?"
+            )
 
-    def _encode_hard_constraints(self, Q: np.ndarray, constant: float) -> float:
+        n = self._num_vars
+
+        # Use float64 by default; it is a good compromise between precision
+        # and compatibility with most numerical/quantum toolchains.
+        self.Q = np.zeros((n, n), dtype=float)
+        self.c = np.zeros(n, dtype=float)
+        self.offset = 0.0
+
+
+    # ==========================
+    # STEP 3: OBJECTIVE FUNCTION
+    # ==========================
+
+    def _add_travel_cost_terms(self) -> None:
         """
-        Encode all hard constraints as quadratic penalties added to Q.
+        Add base travel cost terms to Q and/or c.
+
+        In a simple formulation:
+        - For each variable x[v, i, j], read the cost of arc (i, j)
+          from self.graph (e.g., edge attribute "distance" or "time"),
+        - convert this into linear contributions on self.c[idx]
+          (and possibly quadratic terms on self.Q if needed).
+
+        This method only deals with the pure travel cost, without constraints.
+        """
+        if self.c is None or self.Q is None:
+            raise RuntimeError(
+                "QUBO matrices are not initialized. "
+                "Call _initialize_qubo_matrices() before _add_travel_cost_terms()."
+            )
+
+        for (v, i, j), idx in self._var_index.items():
+            # We assume the graph is (at least) undirected, so (i,j) and (j,i)
+            # share the same edge data in a nx.Graph.
+            if self.graph.has_edge(i, j):
+                edge_data = self.graph[i][j]
+                cost = edge_data.get(self.cost_attribute, 0.0)
+            else:
+                # If for some reason there is no edge, we treat the cost as 0.0.
+                # Later podemos mudar isso para lançar erro, se fizer sentido.
+                cost = 0.0
+
+            # Linear term: cost * x[v,i,j]
+            self.c[idx] += float(cost)
+
+    def _add_additional_objective_terms(self) -> None:
+        """
+        Optional hook to add extra objective components.
 
         Examples:
-            - Each customer has exactly one incoming and one outgoing edge.
-            - Each vehicle leaves the depot once and returns once.
+        - penalizing long idle times,
+        - rewarding balanced usage of vehicles,
+        - adding soft preferences.
 
-        Parameters
-        ----------
-        Q : np.ndarray
-            QUBO matrix to be updated in-place.
-        constant : float
-            Current constant term, to be updated and returned.
+        By default, this method does nothing.
+        Subclasses may override it if needed.
+        """
+        # Default: no extra objective terms
+        pass
+
+    # ==========================
+    # STEP 4: CONSTRAINT TERMS
+    # ==========================
+
+    def _add_constraint_terms(self) -> None:
+        """
+        Add constraint-based contributions to Q, c, and offset.
+
+        Typical usage:
+        - If constraints_handler is provided, call something like:
+          terms = constraints_handler.get_constraints(self.graph, self._var_index, ...)
+          and accumulate these terms into self.Q, self.c, self.offset.
+
+        - Alternatively, implement constraint penalties directly here,
+          especially for small or prototype models.
+
+        This method is a central hook where all constraints are applied
+        on top of the base travel cost.
+        """
+        if self.constraints_handler is None:
+            return
+
+        if self.Q is None or self.c is None:
+            raise RuntimeError(
+                "QUBO matrices are not initialized. "
+                "Call _initialize_qubo_matrices() before _add_constraint_terms()."
+            )
+
+        terms: list[ConstraintTerm] = self.constraints_handler.get_constraints(
+            graph=self.graph,
+            var_index=self._var_index,
+            num_vehicles=self.num_vehicles,
+        )
+
+        for term in terms:
+            # Quadratic contributions
+            for (i, j), coeff in term.quadratic.items():
+                self.Q[i, j] += coeff
+                # Opcional: deixar simetrização para _finalize_qubo
+                # Se preferir garantir simetria aqui:
+                # if i != j:
+                #     self.Q[j, i] += coeff
+
+            # Linear contributions
+            for i, coeff in term.linear.items():
+                self.c[i] += coeff
+
+            # Constant contribution
+            self.offset += term.offset
+
+
+    # ==========================
+    # STEP 5: FINALIZATION
+    # ==========================
+
+    def _finalize_qubo(
+        self,
+    ) -> Tuple[np.ndarray, np.ndarray, float, Dict[Tuple[VehicleId, NodeId, NodeId], Index]]:
+        """
+        Final adjustments and return Q, c, offset, var_index.
+
+        Typical tasks:
+        - ensure self.Q is symmetric (if needed),
+        - clean tiny numerical noise (optional),
+        - cast Q and c to desired dtypes (e.g., float64).
 
         Returns
         -------
-        float
-            Updated constant term including contributions from constraints.
+        Q:
+            Quadratic coefficient matrix (N x N).
+        c:
+            Linear coefficient vector (length N).
+        offset:
+            Constant term of the QUBO.
+        var_index:
+            Mapping from (vehicle_id, origin_node, destination_node) to bit index.
         """
-        # TODO: implement constraint penalties using helper methods like:
-        #       - self._add_equality_one_constraint(indices, penalty, Q)
-        #       - and track constant shifts if needed.
-        raise NotImplementedError("Hard constraints encoding not implemented yet.")
+        if self.Q is None or self.c is None:
+            raise RuntimeError("QUBO matrices are not initialized. Call encode() first.")
 
-    # Here you can add low-level helpers like `_add_qubo_term` and
-    # `_add_equality_one_constraint`.
+        # Ensure symmetry (in case constraint terms only filled one triangle)
+        self.Q = 0.5 * (self.Q + self.Q.T)
+
+        return self.Q, self.c, self.offset, dict(self._var_index)

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Tuple, Any, Optional, List
 
-import numpy as np
+from pennylane import numpy as np
 
 
 # Semantic type for variable keys can be customized by the Encoder.
