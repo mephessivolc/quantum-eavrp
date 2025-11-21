@@ -138,12 +138,8 @@ class Encoder:
 
         self._num_vars = current_index
 
-    @property
-    def get_num_vars(self):
-        return self._num_vars
-    
     # ==========================
-# STEP 2: INITIALIZATION
+    # STEP 2: INITIALIZATION
     # ==========================
 
     def _initialize_qubo_matrices(self) -> None:
