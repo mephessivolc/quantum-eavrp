@@ -3,7 +3,7 @@ services:
     build: .
     container_name: quantum-lab
     volumes:
-      - ./notebooks:/home/jovyan/work
+      - ./src:/home/jovyan/work
     working_dir: /home/jovyan/work
     ports:
       - "4000:4000"
