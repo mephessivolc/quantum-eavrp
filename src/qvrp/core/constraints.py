@@ -5,10 +5,10 @@ from typing import Any, Dict, Tuple, List, Callable, Optional
 import inspect
 import networkx as nx
 
-
 Index = int
 NodeId = Any
 VehicleId = int
+NodeKey = Tuple[VehicleId, NodeId, NodeId]
 
 
 @dataclass
@@ -41,7 +41,7 @@ class ConstraintCollectorMixin:
     def get_constraints(
         self,
         graph: nx.Graph,
-        var_index: Dict[Tuple[VehicleId, NodeId, NodeId], Index],
+        var_index: Dict[NodeKey, Index],
         num_vehicles: int,
     ) -> List[ConstraintTerm]:
         """
@@ -85,8 +85,7 @@ class ConstraintCollectorMixin:
         # Sort by name for deterministic ordering
         methods.sort(key=lambda m: m.__name__)
         return methods
-
-
+    
 class TaxiConstraints(ConstraintCollectorMixin):
     """
     Base constraint set for a taxi-style VRP (no explicit depot).
@@ -233,32 +232,110 @@ class TaxiConstraints(ConstraintCollectorMixin):
     def _constraint_flow(
         self,
         graph: nx.Graph,
-        var_index: Dict[Tuple[VehicleId, NodeId, NodeId], Index],
+        var_index: Dict[NodeKey, Index],
         num_vehicles: int,
     ) -> List[ConstraintTerm]:
         """
-        Build flow / continuity constraints.
+        Flow constraint for taxi-style VRP.
 
-        High-level idea:
-        ----------------
-        For each vehicle v and node k:
-            (sum_j x[v, j, k] - sum_j x[v, k, j])^2
+        For each vehicle v and node k, we enforce that the number of incoming
+        arcs equals the number of outgoing arcs:
 
-        This enforces that, whenever a vehicle enters a node, it also leaves it,
-        avoiding broken paths and isolated arcs.
+            ( sum_i x[v, i, k] - sum_j x[v, k, j] )^2
 
-        QUBO pattern (conceptual):
-        --------------------------
-        For each (v, k):
-            (incoming(v,k) - outgoing(v,k))^2
+        Expanding:
 
-        This method will eventually:
-        - iterate over vehicles and nodes,
-        - collect indices for incoming and outgoing arcs at (v, k),
-        - expand the squared expression with penalty weight
-          penalty_params["flow"],
-        - pack each into a ConstraintTerm.
+            E_flow(v, k) =
+                (sum_in x)^2 + (sum_out x)^2 - 2 (sum_in x)(sum_out x)
+
+        This yields:
+        - linear terms: +1 * x for every in and out variable,
+        - quadratic terms:
+            * +2 * x_a x_b for pairs in the "in" set (a != b),
+            * +2 * x_a x_b for pairs in the "out" set (a != b),
+            * -2 * x_in x_out for cross pairs (in, out).
+
+        All multiplied by the flow penalty parameter.
         """
+        penalty = float(self.penalty_params["flow"])
+        if penalty == 0.0:
+            return []
+
         terms: List[ConstraintTerm] = []
-        # TODO: implement flow QUBO expansion
+
+        nodes = list(graph.nodes())
+
+        for v in range(num_vehicles):
+            for k in nodes:
+                in_vars: List[Index] = []
+                out_vars: List[Index] = []
+
+                # Incoming arcs: (i -> k)
+                for i in nodes:
+                    if i == k:
+                        continue
+                    key_in: NodeKey = (v, i, k)
+                    if key_in in var_index:
+                        in_vars.append(var_index[key_in])
+
+                # Outgoing arcs: (k -> j)
+                for j in nodes:
+                    if j == k:
+                        continue
+                    key_out: NodeKey = (v, k, j)
+                    if key_out in var_index:
+                        out_vars.append(var_index[key_out])
+
+                # If no arcs touch this node for this vehicle, skip
+                if not in_vars and not out_vars:
+                    continue
+
+                linear: Dict[Index, float] = {}
+                quadratic: Dict[Tuple[Index, Index], float] = {}
+
+                # Linear terms: +1 * x for each in and out variable
+                for idx in in_vars + out_vars:
+                    linear[idx] = linear.get(idx, 0.0) + penalty * 1.0
+
+                # Quadratic terms within incoming set: +2 * x_a x_b
+                for a_pos in range(len(in_vars)):
+                    for b_pos in range(a_pos + 1, len(in_vars)):
+                        i_idx = in_vars[a_pos]
+                        j_idx = in_vars[b_pos]
+                        if i_idx == j_idx:
+                            continue
+                        key = (min(i_idx, j_idx), max(i_idx, j_idx))
+                        quadratic[key] = quadratic.get(key, 0.0) + penalty * 2.0
+
+                # Quadratic terms within outgoing set: +2 * x_a x_b
+                for a_pos in range(len(out_vars)):
+                    for b_pos in range(a_pos + 1, len(out_vars)):
+                        i_idx = out_vars[a_pos]
+                        j_idx = out_vars[b_pos]
+                        if i_idx == j_idx:
+                            continue
+                        key = (min(i_idx, j_idx), max(i_idx, j_idx))
+                        quadratic[key] = quadratic.get(key, 0.0) + penalty * 2.0
+
+                # Cross terms (incoming vs outgoing): -2 * x_in x_out
+                for i_idx in in_vars:
+                    for j_idx in out_vars:
+                        if i_idx == j_idx:
+                            continue
+                        key = (min(i_idx, j_idx), max(i_idx, j_idx))
+                        quadratic[key] = quadratic.get(key, 0.0) - penalty * 2.0
+
+                # Offset: no constant term in (sum_in - sum_out)^2
+                offset = 0.0
+
+                name = f"flow_v{v}_node_{k}"
+                terms.append(
+                    ConstraintTerm(
+                        name=name,
+                        linear=linear,
+                        quadratic=quadratic,
+                        offset=offset,
+                    )
+                )
+
         return terms

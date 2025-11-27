@@ -6,7 +6,7 @@ from typing import Any, Dict, Tuple, Optional
 from pennylane import numpy as np
 import networkx as nx
 
-from constraints import ConstraintTerm
+from qvrp.core.constraints import ConstraintTerm
 
 Index = int
 NodeId = Any

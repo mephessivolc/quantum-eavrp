@@ -2,7 +2,7 @@ from __future__ import annotations
 import networkx as nx
 import matplotlib.pyplot as plt
 from typing import List
-from utils import (
+from qvrp.domain.model import (
     Passenger,
     Group,
     Vehicle,

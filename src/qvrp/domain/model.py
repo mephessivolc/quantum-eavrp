@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Tuple
 
-from geographics import Distances
+from qvrp.domain.geographics import Distances
 
 Coord = Tuple[float, float]
 DistanceFn = Callable[[float, float, float, float], float]

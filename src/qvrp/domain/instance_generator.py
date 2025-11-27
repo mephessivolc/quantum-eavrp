@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 import math
 from typing import List, Tuple
-from utils import Passenger, Vehicle, RechargePoint, Depot
+from qvrp.domain.model import Passenger, Vehicle, RechargePoint, Depot
 
 
 class InstanceGenerator:
